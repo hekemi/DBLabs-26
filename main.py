@@ -16,6 +16,11 @@ REFERENCE_TABLES = {
     "street": {"title": "Улицы", "column": "street"},
 }
 
+def reset_filters() -> None:
+    st.session_state["filter_search"] = ""
+    st.session_state["filter_family"] = []
+    st.session_state["filter_street"] = []
+
 
 def format_phone(value: str) -> str:
     digits = "".join(character for character in value if character.isdigit())
@@ -301,14 +306,23 @@ def render_main_page() -> None:
     with st.expander("Фильтры", expanded=True):
         first, second, third = st.columns(3)
         with first:
-            search = st.text_input("Поиск по ФИО, адресу или телефону")
+            search = st.text_input(
+               "Поиск по ФИО, адресу или телефону",                
+               key="filter_search",
+            )
         with second:
-            family_filter = st.multiselect("Фамилия", sorted(records["Фамилия"].unique()))
+            family_filter = st.multiselect(
+                "Фамилия",
+                sorted(records["Фамилия"].unique()),
+                key="filter_family",
+            )
         with third:
             street_filter = st.multiselect(
                 "Улица",
                 sorted(records["Улица"].dropna().unique()),
+                key="filter_street",
             )
+        st.button("Сбросить фильтры", on_click=reset_filters)
 
     filtered = records
     if search:
