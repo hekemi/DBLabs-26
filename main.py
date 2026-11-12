@@ -17,9 +17,11 @@ REFERENCE_TABLES = {
 }
 
 def reset_filters() -> None:
-    st.session_state["filter_search"] = ""
-    st.session_state["filter_family"] = []
-    st.session_state["filter_street"] = []
+    for column in (
+        "ID", "Фамилия", "Имя", "Отчество", "Улица",
+        "Дом", "Корпус", "Квартира", "Телефон",
+    ):
+        st.session_state[f"filter_{column}"] = ""
 
 
 def format_phone(value: str) -> str:
@@ -191,6 +193,16 @@ def delete_reference_value(table: str, value_id: int) -> None:
         connection.commit()
 
 
+def update_reference_value(table: str, value_id: int, value: str) -> None:
+    column = REFERENCE_TABLES[table]["column"]
+    with get_connection() as connection:
+        connection.execute(
+            f'UPDATE "{table}" SET "{column}" = ? WHERE id = ?',
+            (value, value_id),
+        )
+        connection.commit()
+
+
 def show_error(error: Exception) -> None:
     if isinstance(error, sqlite3.IntegrityError):
         message = str(error)
@@ -254,11 +266,14 @@ def render_record_form(
                 "Корпус",
                 value=str(record["Корпус"]) if record is not None and pd.notna(record["Корпус"]) else "",
             )
-            apartment = st.number_input(
+            apartment = st.text_input(
                 "Квартира",
-                min_value=0,
-                step=1,
-                value=int(record["Квартира"]) if record is not None and pd.notna(record["Квартира"]) else 0,
+                value=(
+                    str(int(record["Квартира"]))
+                    if record is not None and pd.notna(record["Квартира"])
+                    else ""
+                ),
+                placeholder="Можно оставить пустым",
             )
 
         submitted = st.form_submit_button("Сохранить", type="primary")
@@ -280,10 +295,14 @@ def render_record_form(
                 st.error(f"Введите значение: {label}.")
                 return
             reference_values[table] = value or None
+        apartment_value = apartment.strip()
+        if apartment_value and not apartment_value.isdigit():
+            st.error("Номер квартиры должен быть целым числом.")
+            return
         values = {
             "build": build.strip() or None,
             "build_k": build_k.strip() or None,
-            "appr": apartment or None,
+            "appr": int(apartment_value) if apartment_value else None,
             "telephone": format_phone(telephone.strip()),
         }
         try:
@@ -304,41 +323,32 @@ def render_main_page() -> None:
     records = load_main_records()
 
     with st.expander("Фильтры", expanded=True):
-        first, second, third = st.columns(3)
-        with first:
-            search = st.text_input(
-               "Поиск по ФИО, адресу или телефону",                
-               key="filter_search",
-            )
-        with second:
-            family_filter = st.multiselect(
-                "Фамилия",
-                sorted(records["Фамилия"].unique()),
-                key="filter_family",
-            )
-        with third:
-            street_filter = st.multiselect(
-                "Улица",
-                sorted(records["Улица"].dropna().unique()),
-                key="filter_street",
-            )
+        filter_columns = (
+            "Фамилия", "Имя", "Отчество", "Улица",
+            "Дом", "Корпус", "Квартира", "Телефон",
+        )
+        filter_grid = st.columns(3)
+        filters: dict[str, str] = {}
+        for index, column in enumerate(filter_columns):
+            with filter_grid[index % 3]:
+                filters[column] = st.text_input(
+                    column,
+                    key=f"filter_{column}",
+                    placeholder=f"Фильтр: {column.lower()}",
+                )
         st.button("Сбросить фильтры", on_click=reset_filters)
 
     filtered = records
-    if search:
-        mask = filtered.astype(str).apply(
-            lambda column: column.str.contains(
-                search,
-                case=False,
-                na=False,
-                regex=False,
-            )
-        ).any(axis=1)
-        filtered = filtered[mask]
-    if family_filter:
-        filtered = filtered[filtered["Фамилия"].isin(family_filter)]
-    if street_filter:
-        filtered = filtered[filtered["Улица"].isin(street_filter)]
+    for column, filter_value in filters.items():
+        if filter_value:
+            filtered = filtered[
+                filtered[column].astype(str).str.contains(
+                    filter_value,
+                    case=False,
+                    na=False,
+                    regex=False,
+                )
+            ]
 
     st.write(f"Найдено записей: **{len(filtered)}**")
     table_event = st.dataframe(
@@ -414,19 +424,42 @@ def render_reference_page() -> None:
             with delete_col:
                 if options:
                     value_id = st.selectbox(
-                        "Удалить значение",
+                        "Выберите значение",
                         list(options),
                         format_func=lambda option: str(options[option]),
                         key=f"delete_{table}",
                     )
-                    if st.button("Удалить", key=f"delete_button_{table}"):
-                        if value_id is not None:
+                    with st.form(f"edit_{table}"):
+                        edited_value = st.text_input(
+                            "Изменить значение",
+                            value=options[value_id],
+                        )
+                        edit_submitted = st.form_submit_button("Сохранить изменения")
+                    delete_submitted = st.button(
+                        "Удалить",
+                        key=f"delete_button_{table}",
+                    )
+                    if edit_submitted:
+                        if not edited_value.strip():
+                            st.error("Значение не может быть пустым.")
+                        else:
                             try:
-                                delete_reference_value(table, value_id)
-                                st.success("Значение удалено.")
+                                update_reference_value(
+                                    table,
+                                    value_id,
+                                    edited_value.strip(),
+                                )
+                                st.success("Значение изменено.")
                                 st.rerun()
                             except sqlite3.Error as error:
                                 show_error(error)
+                    if delete_submitted:
+                        try:
+                            delete_reference_value(table, value_id)
+                            st.success("Значение удалено.")
+                            st.rerun()
+                        except sqlite3.Error as error:
+                            show_error(error)
 
 
 def main() -> None:
